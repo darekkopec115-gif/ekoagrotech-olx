@@ -20,3 +20,7 @@ app.get("/olx/callback", (req, res) => {
 
   res.send("Połączenie z OLX powiodło się. Możesz zamknąć tę stronę.");
 });
+
+app.listen(PORT, () => {
+  console.log(`Serwer EkoAgroTech działa na porcie ${PORT}`);
+});
