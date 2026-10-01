@@ -23,7 +23,6 @@ app.get('/', (req, res) => {
 });
 
 app.get('/olx/login', (req, res) => {
-
   oauthState = crypto.randomBytes(24).toString('hex');
 
   const params = new URLSearchParams({
@@ -40,7 +39,6 @@ app.get('/olx/login', (req, res) => {
 });
 
 app.get('/olx/callback', async (req, res) => {
-
   const { code, state, error } = req.query;
 
   if (error) {
@@ -56,7 +54,6 @@ app.get('/olx/callback', async (req, res) => {
   }
 
   try {
-
     const response = await fetch(
       'https://www.olx.pl/api/open/oauth/token',
       {
@@ -98,7 +95,6 @@ app.get('/olx/callback', async (req, res) => {
 });
 
 app.get('/olx/ogloszenia', async (req, res) => {
-
   if (!accessToken) {
     return res.send(`
       <h1>Brak połączenia z OLX</h1>
@@ -107,7 +103,6 @@ app.get('/olx/ogloszenia', async (req, res) => {
   }
 
   try {
-
     const response = await fetch(
       'https://www.olx.pl/api/partner/adverts',
       {
