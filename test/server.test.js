@@ -8,7 +8,7 @@ test('production app protects panel and OAuth login, exposes health and static a
   await new Promise(resolve => server.on('listening', resolve));
   t.after(() => new Promise(resolve => server.close(resolve)));
   const base = `http://127.0.0.1:${server.address().port}`;
-  for (const route of ['/', '/olx/ogloszenia', '/olx/edytuj/123', '/olx/login']) {
+  for (const route of ['/', '/olx/ogloszenia', '/olx/edytuj/123', '/olx/login', '/olx/nowe', '/olx/slownik/miasta?q=Pacanów']) {
     const response = await fetch(base + route, { redirect: 'manual' });
     assert.equal(response.status, 401);
     assert.match(response.headers.get('www-authenticate'), /Basic/);
@@ -22,5 +22,6 @@ test('production app protects panel and OAuth login, exposes health and static a
   assert.equal((await fetch(base + '/health')).status, 200);
   assert.equal((await fetch(base + '/panel.css')).status, 200);
   assert.equal((await fetch(base + '/panel.js')).status, 200);
+  assert.equal((await fetch(base + '/create.js')).status, 200);
   assert.equal((await fetch(base + '/olx/callback?code=x&state=bad')).status, 400);
 });

@@ -3,6 +3,7 @@ const crypto = require('crypto');
 const { Pool } = require('pg');
 const path = require('node:path');
 const { installPanel } = require('./panel');
+const { PostgresCreationStore } = require('./creation-store');
 
 const app = express();
 const PORT = process.env.PORT || 3000;
@@ -19,6 +20,7 @@ const pool = new Pool({
   connectionString: DATABASE_URL,
   ...(process.env.PGSSLMODE === 'disable' ? { ssl: false } : { ssl: { rejectUnauthorized: false } })
 });
+const creationStore = new PostgresCreationStore(pool);
 
 function requireAdmin(req, res, next) {
   const auth = req.headers.authorization;
@@ -77,6 +79,7 @@ async function przygotujBaze() {
       created_at BIGINT NOT NULL
     )
   `);
+  await creationStore.init();
 }
 
 async function zapiszState(state) {
@@ -188,7 +191,7 @@ app.use((req, res, next) => {
 app.use(express.urlencoded({ extended: false, limit: '128kb' }));
 app.use(express.static(path.join(__dirname, 'public')));
 app.get('/health', (req, res) => res.json({ status: 'ok' }));
-installPanel(app, { requireAdmin, getToken: pobierzAccessToken, secret: ADMIN_PASSWORD || crypto.randomBytes(32).toString('hex') });
+installPanel(app, { requireAdmin, getToken: pobierzAccessToken, secret: ADMIN_PASSWORD || crypto.randomBytes(32).toString('hex'), creationStore });
 
 app.get('/olx/login', requireAdmin, async (req, res) => {
   try {
