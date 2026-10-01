@@ -1,6 +1,8 @@
 const express = require('express');
 const crypto = require('crypto');
 const { Pool } = require('pg');
+const path = require('node:path');
+const { installPanel } = require('./panel');
 
 const app = express();
 const PORT = process.env.PORT || 3000;
@@ -10,22 +12,13 @@ const CLIENT_SECRET = process.env.OLX_CLIENT_SECRET;
 const DATABASE_URL = process.env.DATABASE_URL;
 const ADMIN_PASSWORD = process.env.ADMIN_PASSWORD;
 
-const REDIRECT_URI =
+const REDIRECT_URI = process.env.OLX_REDIRECT_URI ||
   'https://ekoagrotech-olx.onrender.com/olx/callback';
 
 const pool = new Pool({
   connectionString: DATABASE_URL,
-  ssl: { rejectUnauthorized: false }
+  ...(process.env.PGSSLMODE === 'disable' ? { ssl: false } : { ssl: { rejectUnauthorized: false } })
 });
-
-function escapeHtml(value) {
-  return String(value ?? '')
-    .replaceAll('&', '&amp;')
-    .replaceAll('<', '&lt;')
-    .replaceAll('>', '&gt;')
-    .replaceAll('"', '&quot;')
-    .replaceAll("'", '&#039;');
-}
 
 function requireAdmin(req, res, next) {
   const auth = req.headers.authorization;
@@ -41,10 +34,14 @@ function requireAdmin(req, res, next) {
       const username = decoded.slice(0, separator);
       const password = decoded.slice(separator + 1);
 
+      const validPassword = ADMIN_PASSWORD && password.length <= 1024 && crypto.timingSafeEqual(
+        crypto.createHash('sha256').update(password).digest(),
+        crypto.createHash('sha256').update(ADMIN_PASSWORD).digest()
+      );
+
       if (
-        username === 'admin' &&
-        ADMIN_PASSWORD &&
-        password === ADMIN_PASSWORD
+        separator > 0 && username === 'admin' &&
+        validPassword
       ) {
         return next();
       }
@@ -94,25 +91,12 @@ async function zapiszState(state) {
 }
 
 async function sprawdzState(state) {
+  if (typeof state !== 'string' || !/^[a-f0-9]{64}$/.test(state)) return false;
   const result = await pool.query(
-    'SELECT state, created_at FROM olx_oauth_state WHERE id = 1'
+    'DELETE FROM olx_oauth_state WHERE id = 1 AND state = $1 AND created_at > $2 RETURNING id',
+    [state, Date.now() - 10 * 60 * 1000]
   );
-
-  if (!result.rows.length) return false;
-
-  const saved = result.rows[0];
-
-  if (Date.now() - Number(saved.created_at) > 10 * 60 * 1000) {
-    return false;
-  }
-
-  return saved.state === state;
-}
-
-async function usunState() {
-  await pool.query(
-    'DELETE FROM olx_oauth_state WHERE id = 1'
-  );
+  return result.rows.length === 1;
 }
 
 async function zapiszTokeny(data, poprzedniRefreshToken = null) {
@@ -142,7 +126,7 @@ async function zapiszTokeny(data, poprzedniRefreshToken = null) {
   ]);
 }
 
-async function pobierzAccessToken() {
+async function odczytajAccessToken(forceRefresh = false) {
   const result = await pool.query(
     'SELECT * FROM olx_tokens WHERE id = 1'
   );
@@ -151,7 +135,7 @@ async function pobierzAccessToken() {
 
   const token = result.rows[0];
 
-  if (Number(token.expires_at) > Date.now() + 60000) {
+  if (!forceRefresh && Number(token.expires_at) > Date.now() + 60000) {
     return token.access_token;
   }
 
@@ -162,6 +146,7 @@ async function pobierzAccessToken() {
       headers: {
         'Content-Type': 'application/json'
       },
+      signal: AbortSignal.timeout(25000),
       body: JSON.stringify({
         grant_type: 'refresh_token',
         client_id: CLIENT_ID,
@@ -183,14 +168,27 @@ async function pobierzAccessToken() {
   return data.access_token;
 }
 
-app.get('/', requireAdmin, (req, res) => {
-  res.send(`
-    <h1>EkoAgroTech OLX</h1>
-    <p>Panel jest zabezpieczony hasłem.</p>
-    <p><a href="/olx/login">Połącz konto OLX</a></p>
-    <p><a href="/olx/ogloszenia">Pokaż moje ogłoszenia OLX</a></p>
-  `);
+let refreshInFlight;
+async function pobierzAccessToken(forceRefresh = false) {
+  if (refreshInFlight) return refreshInFlight;
+  refreshInFlight = odczytajAccessToken(forceRefresh);
+  try { return await refreshInFlight; } finally { refreshInFlight = null; }
+}
+
+app.disable('x-powered-by');
+app.use((req, res, next) => {
+  res.set({
+    'Cache-Control': 'no-store',
+    'X-Content-Type-Options': 'nosniff',
+    'Referrer-Policy': 'no-referrer',
+    'Content-Security-Policy': "default-src 'self'; img-src 'self' https: http:; script-src 'self'; style-src 'self'; base-uri 'none'; frame-ancestors 'none'; form-action 'self'"
+  });
+  next();
 });
+app.use(express.urlencoded({ extended: false, limit: '128kb' }));
+app.use(express.static(path.join(__dirname, 'public')));
+app.get('/health', (req, res) => res.json({ status: 'ok' }));
+installPanel(app, { requireAdmin, getToken: pobierzAccessToken, secret: ADMIN_PASSWORD || crypto.randomBytes(32).toString('hex') });
 
 app.get('/olx/login', requireAdmin, async (req, res) => {
   try {
@@ -211,7 +209,7 @@ app.get('/olx/login', requireAdmin, async (req, res) => {
       params.toString()
     );
   } catch (err) {
-    console.error(err);
+    console.error('Operacja OLX nie powiodła się.');
     res.status(500).send('Błąd rozpoczęcia połączenia z OLX.');
   }
 });
@@ -225,7 +223,7 @@ app.get('/olx/callback', async (req, res) => {
     );
   }
 
-  if (!code || !state) {
+  if (typeof code !== 'string' || typeof state !== 'string' || !code || !state) {
     return res.status(400).send(
       'Brak wymaganych danych z OLX.'
     );
@@ -240,8 +238,6 @@ app.get('/olx/callback', async (req, res) => {
       );
     }
 
-    await usunState();
-
     const response = await fetch(
       'https://www.olx.pl/api/open/oauth/token',
       {
@@ -249,6 +245,7 @@ app.get('/olx/callback', async (req, res) => {
         headers: {
           'Content-Type': 'application/json'
         },
+        signal: AbortSignal.timeout(25000),
         body: JSON.stringify({
           grant_type: 'authorization_code',
           client_id: CLIENT_ID,
@@ -277,103 +274,26 @@ app.get('/olx/callback', async (req, res) => {
       <p><a href="/">Przejdź do panelu</a></p>
     `);
   } catch (err) {
-    console.error(err);
+    console.error('Operacja OLX nie powiodła się.');
     res.status(500).send('Błąd połączenia z OLX.');
   }
 });
 
-app.get('/olx/ogloszenia', requireAdmin, async (req, res) => {
-  try {
-    const accessToken = await pobierzAccessToken();
-
-    if (!accessToken) {
-      return res.send(`
-        <h1>Brak aktywnego połączenia z OLX</h1>
-        <p><a href="/olx/login">Połącz konto OLX</a></p>
-      `);
-    }
-
-    const response = await fetch(
-      'https://www.olx.pl/api/partner/adverts',
-      {
-        headers: {
-          Authorization: `Bearer ${accessToken}`,
-          Version: '2.0',
-          Accept: 'application/json'
-        }
-      }
-    );
-
-    const data = await response.json();
-
-    if (!response.ok) {
-      console.error('Błąd pobierania ogłoszeń OLX');
-      return res.status(400).send(
-        'Nie udało się pobrać ogłoszeń OLX.'
-      );
-    }
-
-    const adverts = data.data || [];
-
-    const lista = adverts.map(ad => `
-      <div style="
-        border:1px solid #ddd;
-        padding:15px;
-        margin-bottom:12px;
-        border-radius:8px;
-      ">
-        <h2>${escapeHtml(ad.title)}</h2>
-        <p>Status: ${escapeHtml(ad.status)}</p>
-        <a
-          href="${escapeHtml(ad.url)}"
-          target="_blank"
-          rel="noopener noreferrer"
-        >
-          Otwórz ogłoszenie
-        </a>
-        <br><br>
-<a href="/olx/edytuj/${encodeURIComponent(ad.id)}">Edytuj</a>
-      </div>
-    `).join('');
-
-    res.send(`
-      <!doctype html>
-      <html lang="pl">
-      <head>
-        <meta charset="utf-8">
-        <meta name="viewport"
-              content="width=device-width, initial-scale=1">
-        <title>EkoAgroTech OLX</title>
-      </head>
-      <body style="
-        font-family:Arial,sans-serif;
-        max-width:900px;
-        margin:30px auto;
-        padding:15px;
-      ">
-        <h1>Ogłoszenia EkoAgroTech</h1>
-        <p>Znaleziono: ${adverts.length}</p>
-        ${lista || '<p>Brak ogłoszeń.</p>'}
-      </body>
-      </html>
-    `);
-  } catch (err) {
-    console.error(err);
-    res.status(500).send(
-      'Błąd podczas pobierania ogłoszeń.'
-    );
-  }
+app.use((err, req, res, next) => {
+  res.status(err.type === 'entity.too.large' ? 413 : 500).send('Nie udało się obsłużyć żądania. Sprawdź rozmiar formularza i spróbuj ponownie.');
 });
 
-przygotujBaze()
-  .then(() => {
-    app.listen(PORT, '0.0.0.0', () => {
-      console.log(
-        `Serwer EkoAgroTech działa na porcie ${PORT}`
-      );
-    });
-  })
-  .catch(err => {
-    console.error('Błąd połączenia z bazą:', err);
+if (require.main === module) {
+  if (!CLIENT_ID || !CLIENT_SECRET || !DATABASE_URL || !ADMIN_PASSWORD) {
+    console.error('Wymagane zmienne: OLX_CLIENT_ID, OLX_CLIENT_SECRET, DATABASE_URL, ADMIN_PASSWORD.');
     process.exit(1);
-  });
+  }
+  przygotujBaze()
+    .then(() => {
+      const server = app.listen(PORT, '0.0.0.0', () => console.log(`Serwer EkoAgroTech działa na porcie ${PORT}`));
+      process.on('SIGTERM', () => server.close(() => pool.end().finally(() => process.exit(0))));
+    })
+    .catch(() => { console.error('Błąd połączenia z bazą danych.'); process.exit(1); });
+}
+
+module.exports = { app, requireAdmin, pool };
