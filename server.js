@@ -331,6 +331,8 @@ app.get('/olx/ogloszenia', requireAdmin, async (req, res) => {
         >
           Otwórz ogłoszenie
         </a>
+        <br><br>
+<a href="/olx/edytuj/${encodeURIComponent(ad.id)}">Edytuj</a>
       </div>
     `).join('');
 
