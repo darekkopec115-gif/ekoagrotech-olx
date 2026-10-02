@@ -59,7 +59,7 @@ function apiError(status, body) {
   const details = body?.error?.validation || body?.validation || [];
   return `OLX nie przyjął zmian (HTTP ${status}). ${Array.isArray(details) ? details.map(x => [x.field, x.title, x.detail].filter(Boolean).join(': ')).join('; ').slice(0, 1800) : 'Sprawdź wpisane dane.'}`;
 }
-function installPanel(app, { requireAdmin, getToken, secret, fetchImpl = fetch, creationStore }) {
+function installPanel(app, { requireAdmin, getToken, secret, fetchImpl = fetch, creationStore, imageStore }) {
   const saving = new Set();
   async function api(path, method = 'GET', payload) {
     let token = await getToken();
@@ -80,7 +80,7 @@ function installPanel(app, { requireAdmin, getToken, secret, fetchImpl = fetch, 
     const known = error instanceof OlxError;
     res.status(known && error.status < 500 ? error.status : 502).send(page('Błąd', notice(known ? error.message : 'Nie udało się połączyć z OLX. Spróbuj ponownie za chwilę.') + '<a class="button" href="/olx/ogloszenia">Wróć do ogłoszeń</a>'));
   }
-  installNewAdvert(app, { api, requireAdmin, secret, page, escape, notice, fail, creationStore });
+  installNewAdvert(app, { api, requireAdmin, secret, page, escape, notice, fail, creationStore, imageStore });
   app.get('/', requireAdmin, (req, res) => res.redirect('/olx/ogloszenia'));
   app.get('/olx/ogloszenia', requireAdmin, async (req, res) => {
     const raw = req.query.offset ?? '0';
