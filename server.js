@@ -4,6 +4,7 @@ const { Pool } = require('pg');
 const path = require('node:path');
 const { installPanel } = require('./panel');
 const { PostgresCreationStore } = require('./creation-store');
+const { PostgresImageStore } = require('./image-store');
 
 const app = express();
 const PORT = process.env.PORT || 3000;
@@ -21,6 +22,7 @@ const pool = new Pool({
   ...(process.env.PGSSLMODE === 'disable' ? { ssl: false } : { ssl: { rejectUnauthorized: false } })
 });
 const creationStore = new PostgresCreationStore(pool);
+const imageStore = new PostgresImageStore(pool);
 
 function requireAdmin(req, res, next) {
   const auth = req.headers.authorization;
@@ -80,6 +82,7 @@ async function przygotujBaze() {
     )
   `);
   await creationStore.init();
+  await imageStore.init();
 }
 
 async function zapiszState(state) {
@@ -191,7 +194,15 @@ app.use((req, res, next) => {
 app.use(express.urlencoded({ extended: false, limit: '128kb' }));
 app.use(express.static(path.join(__dirname, 'public')));
 app.get('/health', (req, res) => res.json({ status: 'ok' }));
-installPanel(app, { requireAdmin, getToken: pobierzAccessToken, secret: ADMIN_PASSWORD || crypto.randomBytes(32).toString('hex'), creationStore });
+app.get('/olx-zdjecia/:id', async (req, res) => {
+  try {
+    const image = await imageStore.get(req.params.id);
+    if (!image) return res.sendStatus(404);
+    res.set({ 'Content-Type': image.mime_type, 'Cache-Control': 'public, max-age=1209600, immutable' });
+    return res.send(image.data);
+  } catch { return res.sendStatus(404); }
+});
+installPanel(app, { requireAdmin, getToken: pobierzAccessToken, secret: ADMIN_PASSWORD || crypto.randomBytes(32).toString('hex'), creationStore, imageStore });
 
 app.get('/olx/login', requireAdmin, async (req, res) => {
   try {
