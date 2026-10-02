@@ -216,7 +216,7 @@ function installNewAdvert(app, { api, requireAdmin, secret, page, escape, notice
     try {
       if (req.files?.length) {
         if (!imageStore) { const error = new Error('Magazyn zdjęć jest niedostępny.'); error.status = 502; throw error; }
-        const base = `${req.protocol}://${req.get('host')}`;
+        const base = `https://${req.get('host')}`;
         const uploaded = [];
         for (const file of req.files) uploaded.push(`${base}/olx-zdjecia/${await imageStore.save(file)}`);
         req.body.images = [req.body.images || '', ...uploaded].filter(Boolean).join('\n');
